@@ -1,0 +1,22 @@
+---
+- name: Create a volume using ibm.storage_virtualize
+  hosts: all
+  gather_facts: false
+  collections:
+    - ibm.storage_virtualize
+  tasks:
+    - name: Create a standard volume
+      ibm.storage_virtualize.ibm_svc_manage_volume:
+        clustername: "{{ clustername }}"
+        username: "{{ username }}"
+        password: "{{ password }}"
+        name: "{{ volume_name }}"
+        state: "present"
+        pool: "{{ pool_name }}"
+        size: "{{ volume_size }}"
+        unit: "{{ volume_unit }}"
+      register: create_result
+
+    - name: Print the result
+      debug:
+        var: create_result
