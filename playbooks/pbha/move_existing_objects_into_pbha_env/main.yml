@@ -1,0 +1,97 @@
+---
+- name: Move existing objects (volumegroup and host) to a newly created partition (AAP Compatible)
+  hosts: primary_storage
+  gather_facts: false
+  connection: local
+  collections:
+    - ibm.storage_virtualize
+  tasks:
+    - name: Fetch auth token for primary cluster
+      register: primary_auth
+      no_log: true
+      ibm.storage_virtualize.ibm_svc_auth:
+        clustername: "{{ clustername }}"
+        username: "{{ username }}"
+        password: "{{ password }}"
+        log_path: "{{ log_path | default('/tmp/ansiblePB.log') }}"
+
+    - name: Fetch auth token for secondary cluster
+      register: secondary_auth
+      no_log: true
+      ibm.storage_virtualize.ibm_svc_auth:
+        clustername: "{{ hostvars['secondary_storage']['clustername'] }}"
+        username: "{{ hostvars['secondary_storage']['username'] }}"
+        password: "{{ hostvars['secondary_storage']['password'] }}"
+        log_path: "{{ log_path | default('/tmp/ansiblePB.log') }}"
+
+    - name: Setup mTLS and partnership between primary and secondary clusters
+      ansible.builtin.include_tasks: create_mTLS.yml
+
+    - name: Setup replication link between primary and secondary clusters
+      ansible.builtin.include_tasks: replication_setup.yml
+
+    - name: Set up the quorum application on the primary system
+      ibm.storage_virtualize.ibm_svctask_command:
+        command: "svctask mkquorumapp -partnersystem {{ hostvars['secondary_storage']['clustername'] }}"
+        clustername: "{{ clustername }}"
+        username: "{{ username }}"
+        password: "{{ password }}"
+        log_path: "{{ log_path | default('/tmp/ansiblePB.log') }}"
+
+    - name: Create a partition in draft state
+      ibm.storage_virtualize.ibm_sv_manage_storage_partition:
+        clustername: "{{ clustername }}"
+        token: "{{ primary_auth.token }}"
+        log_path: "{{ log_path | default('/tmp/ansiblePB.log') }}"
+        name: "{{ partition_name }}"
+        state: present
+        draft: true
+
+    - name: Add volumegroup in draft partition
+      ibm.storage_virtualize.ibm_svc_manage_volumegroup:
+        clustername: "{{ clustername }}"
+        token: "{{ primary_auth.token }}"
+        log_path: "{{ log_path | default('/tmp/ansiblePB.log') }}"
+        name: "{{ volume_group_name }}"
+        state: present
+        draftpartition: "{{ partition_name }}"
+      when: volume_group_name is defined
+
+    - name: Create an FC host (If host is existing, this is a no-op)
+      ibm.storage_virtualize.ibm_svc_host:
+        clustername: "{{ clustername }}"
+        token: "{{ primary_auth.token }}"
+        log_path: "{{ log_path | default('/tmp/ansiblePB.log') }}"
+        name: "{{ host_name }}"
+        state: "present"
+        fcwwpn: "{{ fcwwpn }}"
+      when: host_name is defined
+
+    - name: Move host into draft partition
+      ibm.storage_virtualize.ibm_svc_host:
+        clustername: "{{ clustername }}"
+        token: "{{ primary_auth.token }}"
+        log_path: "{{ log_path | default('/tmp/ansiblePB.log') }}"
+        name: "{{ host_name }}"
+        state: present
+        draftpartition: "{{ partition_name }}"
+      when: host_name is defined
+
+    - name: Publish a draft partition
+      ibm.storage_virtualize.ibm_sv_manage_storage_partition:
+        clustername: "{{ clustername }}"
+        token: "{{ primary_auth.token }}"
+        log_path: "{{ log_path | default('/tmp/ansiblePB.log') }}"
+        name: "{{ partition_name }}"
+        state: present
+        draft: false
+
+    - name: Convert a non-HA partition to HA partition (by assigning ha_replication-policy); This starts data-sync.
+      ibm.storage_virtualize.ibm_sv_manage_storage_partition:
+        clustername: "{{ clustername }}"
+        token: "{{ primary_auth.token }}"
+        log_path: "{{ log_path | default('/tmp/ansiblePB.log') }}"
+        name: "{{ partition_name }}"
+        state: present
+        replicationpolicy: "{{ ha_policy_name }}"
+      when: ha_policy_name is defined
